@@ -163,10 +163,10 @@
     <div class="modal-box">
       <h3>⚙ 配置</h3>
       <label class="field">
-        <span>Worker 推送地址（留空则用「复制+手动」兜底）</span>
-        <input id="cfgWorker" type="text" placeholder="https://your-worker.your-sub.workers.dev/api/wechat/draft" />
+        <span>Worker 根地址（留空则解析走代理、推送走手动）</span>
+        <input id="cfgWorker" type="text" placeholder="https://你的worker.workers.dev" />
       </label>
-      <p class="hint">Worker 地址用于「一键直推草稿箱」。不填也能用，只是最后一步改为复制 HTML + 打开公众号后台手动粘贴。</p>
+      <p class="hint">填了 Worker 根地址后：① 解析会优先走服务端中转（绕开浏览器 CORS/代理，国内最稳）；② 推送可一键直推草稿箱（需同时在 Worker 里配置微信 AppID/Secret）。不填也能用：解析走免费代理+手动兜底，推送走「复制+开后台手动存」。</p>
       <div class="row end">
         <button id="btnSaveCfg" class="btn primary">保存</button>
         <button id="btnCloseCfg" class="btn ghost">关闭</button>

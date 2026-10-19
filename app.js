@@ -8,6 +8,14 @@
   const $ = (id) => document.getElementById(id);
   const LS = window.localStorage;
 
+  // 读取 Worker 根地址（配置里存的是根地址，如 https://xxx.workers.dev）
+  function getWorkerBase() {
+    let v = (LS.getItem("v2w_worker") || "").trim().replace(/\/+$/, "");
+    if (!v) return "";
+    if (v.endsWith("/api/wechat/draft")) v = v.replace(/\/api\/wechat\/draft$/, "");
+    return v;
+  }
+
   function setStatus(elId, msg, type) {
     const el = $(elId);
     el.textContent = msg;
@@ -171,11 +179,30 @@
     $("btnParse").disabled = true;
     let result = null;
 
+    // 第零级：已配置 Worker 则优先走服务端解析（最稳，绕开 CORS/代理）
+    const wbase = getWorkerBase();
+    if (wbase) {
+      setStatus("parseStatus", "经 Worker 服务端解析（最稳）…", "info");
+      try {
+        const r = await fetch(wbase + "/api/parse?url=" + encodeURIComponent(urls[0]), { headers: { "Accept": "application/json" } });
+        const j = await r.json();
+        if (j && j.errcode === 0 && j.media) {
+          result = { media: j.media, title: j.title || "", author: j.author || "", source: "Worker 服务端解析" };
+        } else if (j && j.errmsg) {
+          setStatus("parseStatus", "Worker 解析：" + j.errmsg + "，转备用通道…", "warn");
+        }
+      } catch (e) {
+        setStatus("parseStatus", "Worker 解析异常：" + e.message + "，转备用通道…", "warn");
+      }
+    }
+
     // 第一级：免费解析源（快速跳过失效源）
-    for (const src of PARSE_SOURCES) {
-      setStatus("parseStatus", "尝试免费源：" + src.name + " …", "info");
-      result = await tryParse(src, urls[0]);
-      if (result) break;
+    if (!result) {
+      for (const src of PARSE_SOURCES) {
+        setStatus("parseStatus", "尝试免费源：" + src.name + " …", "info");
+        result = await tryParse(src, urls[0]);
+        if (result) break;
+      }
     }
 
     // 第二级：网页自解析（短链→ID→feed接口，经免费代理中转）
@@ -419,8 +446,8 @@
     const title = ($("inpTitle").value || "未命名文章").trim();
     if (!html) { setStatus("pushStatus", "请先完成改写生成成稿", "warn"); return; }
 
-    const workerUrl = (LS.getItem("v2w_worker") || "").trim();
-    if (!workerUrl) {
+    const wbase = getWorkerBase();
+    if (!wbase) {
       // 兜底：复制 + 开后台
       return manualPush(html, title);
     }
@@ -430,7 +457,7 @@
       const cover = await getCoverDataUrl();
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 30000);
-      const r = await fetch(workerUrl, {
+      const r = await fetch(wbase + "/api/wechat/draft", {
         method: "POST", signal: ctrl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, content: html, digest: ($("inpDigest").value || "").trim(), cover }),
@@ -513,6 +540,6 @@
     syncKeyField();
     renderPreview();
 
-    console.log("[v2w] 工作台已就绪。Worker 地址：" + (LS.getItem("v2w_worker") || "（未配置，将用手动兜底）"));
+    console.log("[v2w] 工作台已就绪。Worker 地址：" + (getWorkerBase() || "（未配置，将用手动兜底）"));
   });
 })();
