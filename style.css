@@ -1,0 +1,69 @@
+:root{
+  --bg:#f5f7fa; --card:#ffffff; --ink:#1f2533; --muted:#6b7280;
+  --line:#e5e7eb; --primary:#2f6bff; --primary-d:#1f4fd6;
+  --danger:#e5484d; --ok:#16a34a; --warn:#d97706;
+  --radius:14px; --shadow:0 1px 3px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.05);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--ink);line-height:1.6}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 22px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:38px;height:38px;border-radius:10px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px}
+.brand h1{font-size:17px;margin:0}
+.sub{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+.top-actions{display:flex;gap:8px}
+
+.flow{max-width:880px;margin:22px auto;padding:0 16px;display:flex;flex-direction:column;gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.card-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);background:#fafbfc}
+.card-head h2{font-size:15px;margin:0;flex:1}
+.badge{width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+.card-body{padding:16px 18px}
+
+.field{display:block;margin-bottom:12px}
+.field>span{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+.field.inline{display:flex;flex-direction:column;gap:4px}
+.field.inline.grow{flex:1;min-width:220px}
+.row{display:flex;gap:10px;align-items:center}
+.row.wrap{flex-wrap:wrap}
+.row.end{justify-content:flex-end}
+.or{text-align:center;color:var(--muted);font-size:13px;margin:6px 0}
+
+input[type=text],input[type=password],textarea,select{
+  width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;
+  font-family:inherit;background:#fff;color:var(--ink);outline:none;transition:border .15s}
+input:focus,textarea:focus,select:focus{border-color:var(--primary)}
+textarea{resize:vertical}
+select{width:auto;min-width:160px}
+
+.btn{cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--ink);padding:9px 14px;border-radius:10px;font-size:14px;font-weight:500;transition:.15s;white-space:nowrap}
+.btn:hover{border-color:var(--primary);color:var(--primary)}
+.btn.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.btn.primary:hover{background:var(--primary-d);color:#fff}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--danger);border-color:#f3c2c4}
+.btn.danger:hover{background:#fdecec;color:var(--danger);border-color:var(--danger)}
+.btn.rerun{font-size:12px;padding:5px 10px;color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+.status{margin-top:10px;font-size:13.5px;padding:10px 12px;border-radius:10px;display:none}
+.status.show{display:block}
+.status.info{background:#eef4ff;color:#1f4fd6}
+.status.ok{background:#e9f8ee;color:var(--ok)}
+.status.err{background:#fdecec;color:var(--danger)}
+.status.warn{background:#fef4e6;color:var(--warn)}
+
+.result{margin-top:12px;padding:12px;border:1px dashed var(--line);border-radius:10px;background:#fafbfc}
+.result a{color:var(--primary);font-weight:600;word-break:break-all}
+.hint{font-size:12.5px;color:var(--muted);margin:6px 0 0}
+.hidden{display:none!important}
+
+.preview{border:1px solid var(--line);border-radius:10px;padding:16px;margin:12px 0;background:#fff;max-height:420px;overflow:auto}
+.preview h1,.preview h2{margin-top:0}
+.preview img{max-width:100%}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal-box{background:#fff;border-radius:14px;padding:22px;width:min(480px,92vw);box-shadow:var(--shadow)}
+.modal-box h3{margin:0 0 14px}
+.foot{text-align:center;color:var(--muted);font-size:12.5px;padding:18px}

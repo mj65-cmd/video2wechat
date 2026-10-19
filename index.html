@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>视频→公众号 一键成文工作台</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">▶</span>
+      <div>
+        <h1>视频 → 公众号 一键成文工作台</h1>
+        <p class="sub">抖音解析 · JotMe 转写 · DeepSeek/GPT 改写 · 直推草稿箱（全免费 · 纯网页）</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="btnSettings" class="btn ghost">⚙ 配置</button>
+      <button id="btnClearAll" class="btn danger">🗑 清空全部</button>
+    </div>
+  </header>
+
+  <main class="flow">
+
+    <!-- 步骤 1：输入 / 解析 -->
+    <section class="card" data-step="1">
+      <div class="card-head">
+        <span class="badge">1</span>
+        <h2>粘贴抖音链接 / 上传媒体</h2>
+        <button class="btn rerun" data-rerun="parse" title="重新解析">↻ 重跑</button>
+      </div>
+      <div class="card-body">
+        <label class="field">
+          <span>抖音分享链接（v.douyin.com/... 或 完整链接）</span>
+          <div class="row">
+            <input id="inpUrl" type="text" placeholder="https://v.douyin.com/xxxxxxxx/" />
+            <button id="btnParse" class="btn primary">🔗 解析</button>
+          </div>
+        </label>
+        <div class="or">— 或 —</div>
+        <label class="field">
+          <span>直接上传视频/音频文件（跳过解析，拿去 JotMe 转写）</span>
+          <input id="inpFile" type="file" accept="video/*,audio/*" />
+        </label>
+        <div id="parseStatus" class="status"></div>
+        <div id="parseResult" class="result hidden">
+          <p>✅ 解析成功，拿到媒体直链：</p>
+          <a id="mediaLink" href="#" target="_blank" rel="noopener">打开 / 下载媒体</a>
+          <p class="hint">提示：可直接把该文件下载后上传到 JotMe；或本工具的「去 JotMe 转写」按钮也支持直接传视频。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 步骤 2：转写 -->
+    <section class="card" data-step="2">
+      <div class="card-head">
+        <span class="badge">2</span>
+        <h2>转写为文字（JotMe 网页）</h2>
+        <button class="btn rerun" data-rerun="transcribe" title="重跑转写">↻ 重跑</button>
+      </div>
+      <div class="card-body">
+        <p class="hint">JotMe 无开放 API，故采用「跳转网页 → 转写 → 复制回来」方式，零后端集成。</p>
+        <div class="row">
+          <button id="btnJotMe" class="btn primary">🎙 去 JotMe 转写 ↗</button>
+          <select id="jotmeType" class="select">
+            <option value="video-to-text">视频转文字</option>
+            <option value="audio-to-text">音频转文字</option>
+          </select>
+        </div>
+        <label class="field" style="margin-top:12px">
+          <span>把 JotMe 转写结果粘贴到这里</span>
+          <textarea id="inpTranscript" rows="6" placeholder="在此粘贴 JotMe 生成的文字……"></textarea>
+        </label>
+        <div class="row">
+          <button id="btnUseTranscript" class="btn">✓ 采用此文字进入改写</button>
+        </div>
+        <div id="transcriptStatus" class="status"></div>
+      </div>
+    </section>
+
+    <!-- 步骤 3：改写 -->
+    <section class="card" data-step="3">
+      <div class="card-head">
+        <span class="badge">3</span>
+        <h2>AI 深度改写（DeepSeek / GPT）</h2>
+        <button class="btn rerun" data-rerun="rewrite" title="重新改写">↻ 重跑</button>
+      </div>
+      <div class="card-body">
+        <div class="row wrap">
+          <label class="field inline">
+            <span>模型</span>
+            <select id="selProvider" class="select">
+              <option value="deepseek">DeepSeek (deepseek-chat)</option>
+              <option value="openai">OpenAI (gpt-4o-mini)</option>
+            </select>
+          </label>
+          <label class="field inline">
+            <span>文风</span>
+            <select id="selStyle" class="select">
+              <option value="pro">专业干货</option>
+              <option value="casual">轻松口语</option>
+              <option value="story">故事种草</option>
+            </select>
+          </label>
+          <label class="field inline grow">
+            <span>API Key（仅存你本地浏览器）</span>
+            <input id="inpKey" type="password" placeholder="sk-... 或 dsk-..." />
+          </label>
+        </div>
+        <div class="row">
+          <button id="btnRewrite" class="btn primary">✨ 开始改写</button>
+          <span class="hint">改写内容定位：AI 模型 / 工具类知识科普</span>
+        </div>
+        <div id="rewriteStatus" class="status"></div>
+        <label class="field" style="margin-top:10px">
+          <span>改写结果（可手动微调，支持 HTML，直接用于公众号）</span>
+          <textarea id="inpArticle" rows="14" placeholder="改写后的成稿会出现在这里，可直接编辑……"></textarea>
+        </label>
+        <label class="field inline">
+          <span>文章标题</span>
+          <input id="inpTitle" type="text" placeholder="自动生成或自拟标题" />
+        </label>
+        <label class="field inline">
+          <span>摘要（选填）</span>
+          <input id="inpDigest" type="text" placeholder="草稿箱列表里显示的摘要" />
+        </label>
+      </div>
+    </section>
+
+    <!-- 步骤 4：预览 + 推送 -->
+    <section class="card" data-step="4">
+      <div class="card-head">
+        <span class="badge">4</span>
+        <h2>预览 & 推送到公众号草稿箱</h2>
+        <button class="btn rerun" data-rerun="push" title="重新推送">↻ 重跑</button>
+      </div>
+      <div class="card-body">
+        <div class="row wrap">
+          <label class="field inline">
+            <span>封面图（选填，自动生成默认封面）</span>
+            <input id="inpCover" type="file" accept="image/*" />
+          </label>
+        </div>
+        <div class="preview" id="preview"></div>
+        <div class="row">
+          <button id="btnPush" class="btn primary">🚀 推送到草稿箱</button>
+          <button id="btnManual" class="btn">📋 复制+开后台手动存</button>
+        </div>
+        <div id="pushStatus" class="status"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 配置弹窗 -->
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-box">
+      <h3>⚙ 配置</h3>
+      <label class="field">
+        <span>Worker 推送地址（留空则用「复制+手动」兜底）</span>
+        <input id="cfgWorker" type="text" placeholder="https://your-worker.your-sub.workers.dev/api/wechat/draft" />
+      </label>
+      <p class="hint">Worker 地址用于「一键直推草稿箱」。不填也能用，只是最后一步改为复制 HTML + 打开公众号后台手动粘贴。</p>
+      <div class="row end">
+        <button id="btnSaveCfg" class="btn primary">保存</button>
+        <button id="btnCloseCfg" class="btn ghost">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span>纯静态 · 零费用 · 不依赖 WorkBuddy / 言序 · 解析与推送均含兜底，避免停摆</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

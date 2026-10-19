@@ -1,0 +1,8 @@
+name = "video2wechat-bridge"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# 密钥请用 secret 注入，不要写在这里：
+#   wrangler secret put WECHAT_APPID
+#   wrangler secret put WECHAT_SECRET
+# 如需限定来源域名，可改为具体域名而非 "*"（worker.js 内 cors() 中调整）
