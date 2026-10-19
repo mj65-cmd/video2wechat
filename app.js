@@ -58,57 +58,167 @@
     return found;
   }
 
-  // ---------- 解析（多级降级） ----------
+  // ---------- 解析（多级降级：免费源 → 网页自解析 → 手动兜底） ----------
   const PARSE_SOURCES = [
-    { name: "aa1.cn（主，已验证 CORS）", url: (u) => "https://v.api.aa1.cn/api/douyin/index.php?url=" + encodeURIComponent(u) },
+    { name: "aa1.cn", url: (u) => "https://v.api.aa1.cn/api/douyin/index.php?url=" + encodeURIComponent(u) },
     { name: "vvhan", url: (u) => "https://api.vvhan.com/api/douyin/parse?url=" + encodeURIComponent(u) },
     { name: "pearktrue", url: (u) => "https://api.pearktrue.cn/api/douyin/?url=" + encodeURIComponent(u) },
     { name: "eryou", url: (u) => "https://api.eryou.net/api/douyin/?url=" + encodeURIComponent(u) },
   ];
 
+  // 免费传输通道（CORS 代理轮换）：抖音域不开放 CORS，读 JSON/页面需经代理中转
+  const TRANSPORTS = [
+    { name: "直连", wrap: (u) => u },
+    { name: "cors.workers", wrap: (u) => "https://test.cors.workers.dev/?" + u },
+    { name: "cors.lol", wrap: (u) => "https://api.cors.lol/?url=" + encodeURIComponent(u) },
+    { name: "cors.eu.org", wrap: (u) => "https://cors.eu.org/" + u },
+    { name: "allorigins", wrap: (u) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u) },
+    { name: "codetabs", wrap: (u) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u) },
+  ];
+
+  // 从用户粘贴的任意文本（分享口令等）提取 http(s) 链接
+  function extractUrls(text) {
+    const m = (text || "").match(/https?:\/\/[^\s，,。""'）)【】]+/g) || [];
+    return m.map((s) => s.replace(/[)，。、）\]\}.,]+$/, "")).filter(Boolean);
+  }
+
+  // 经多个传输通道取回文本内容
+  async function fetchViaTransports(url, timeoutMs, onTry) {
+    for (const t of TRANSPORTS) {
+      if (onTry) onTry(t.name);
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        const r = await fetch(t.wrap(url), { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!r.ok) continue;
+        const txt = await r.text();
+        if (txt && txt.length > 20) return txt;
+      } catch (e) { /* 该通道失败，换下一个 */ }
+    }
+    return null;
+  }
+
+  // 从链接（或其分享页内容）解析出视频 aweme_id
+  async function resolveAwemeId(url, onTry) {
+    let m = url.match(/\/video\/(\d+)/) || url.match(/modal_id=(\d+)/);
+    if (m) return m[1];
+    if (/v\.douyin\.com\//i.test(url)) {
+      // 短链：取分享页内容（代理会跟随302），从中找 itemId
+      const html = await fetchViaTransports(url, 10000, onTry);
+      if (html) {
+        const m2 = html.match(/"itemId"\s*:\s*"(\d+)"/) ||
+                  html.match(/\/video\/(\d{15,})/) ||
+                  html.match(/aweme_id=(\d+)/) ||
+                  html.match(/modal_id=(\d+)/);
+        if (m2) return m2[1];
+      }
+    }
+    return null;
+  }
+
+  // 用 aweme_id 调 snssdk feed 接口拿标题 + 播放直链（已实测可用）
+  async function fetchInfoById(id, onTry) {
+    const api = "https://aweme.snssdk.com/aweme/v1/feed/?aweme_id=" + id;
+    const txt = await fetchViaTransports(api, 15000, onTry);
+    if (!txt) return null;
+    try {
+      const j = JSON.parse(txt.slice(txt.indexOf("{"), txt.lastIndexOf("}") + 1));
+      const item = j.aweme_list && j.aweme_list[0];
+      if (!item) return null;
+      const v = item.video || {};
+      const pick = (a) => {
+        const ls = (a && a.url_list) || [];
+        return ls.find((u) => /^https:\/\//.test(u)) || ls[0] || "";
+      };
+      let media = pick(v.play_addr) || pick(v.play_addr_lowbr) || pick(v.download_addr);
+      const uri = v.play_addr && v.play_addr.uri;
+      if (!media && uri) media = "https://aweme.snssdk.com/aweme/v1/play/?video_id=" + uri + "&ratio=720p&line=0";
+      if (!media) return null;
+      return {
+        media,
+        title: item.desc || "",
+        author: (item.author && item.author.nickname) || "",
+        source: "网页自解析（snssdk feed）",
+      };
+    } catch (e) { return null; }
+  }
+
   async function tryParse(src, url) {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 12000);
+    const t = setTimeout(() => ctrl.abort(), 6000);
     try {
-      const r = await fetch(src.url(url), { signal: ctrl.signal, headers: { "Accept": "application/json" } });
+      const r = await fetch(src.url(url), { signal: ctrl.signal });
       clearTimeout(t);
       if (!r.ok) return null;
       const text = await r.text();
       let json; try { json = JSON.parse(text); } catch { return null; }
       const media = deepFindMediaUrl(json);
       if (!media) return null;
-      const title = deepFindTitle(json);
-      return { media, title, source: src.name };
+      return { media, title: deepFindTitle(json), author: "", source: src.name };
     } catch (e) {
       clearTimeout(t);
-      return null; // CORS/网络/超时 → 该源不可用
+      return null;
     }
   }
 
   async function doParse() {
-    const url = ($("inpUrl").value || "").trim();
-    if (!url) { setStatus("parseStatus", "请先粘贴抖音链接", "warn"); return; }
-    setStatus("parseStatus", "正在解析（依次尝试多个免费源）…", "info");
+    const raw = ($("inpUrl").value || "").trim();
+    if (!raw) { setStatus("parseStatus", "请先粘贴抖音链接（直接把分享口令整段粘贴进来也行）", "warn"); return; }
+    const urls = extractUrls(raw);
+    if (!urls.length) { setStatus("parseStatus", "没有在输入里找到链接，请确认包含 https://v.douyin.com/... ", "warn"); return; }
+
     $("btnParse").disabled = true;
     let result = null;
+
+    // 第一级：免费解析源（快速跳过失效源）
     for (const src of PARSE_SOURCES) {
-      setStatus("parseStatus", "尝试：" + src.name + " …", "info");
-      result = await tryParse(src, url);
+      setStatus("parseStatus", "尝试免费源：" + src.name + " …", "info");
+      result = await tryParse(src, urls[0]);
       if (result) break;
+    }
+
+    // 第二级：网页自解析（短链→ID→feed接口，经免费代理中转）
+    if (!result) {
+      for (const u of urls.slice(0, 3)) {
+        setStatus("parseStatus", "免费源不可用，转网页自解析：识别视频 ID…", "info");
+        const id = await resolveAwemeId(u, (tName) =>
+          setStatus("parseStatus", "网页自解析：识别视频 ID（通道 " + tName + "）…", "info"));
+        if (!id) continue;
+        setStatus("parseStatus", "已拿到视频 ID " + id.slice(-6) + "，获取播放地址…", "info");
+        result = await fetchInfoById(id, (tName) =>
+          setStatus("parseStatus", "网页自解析：获取播放地址（通道 " + tName + "）…", "info"));
+        if (result) break;
+      }
     }
     $("btnParse").disabled = false;
 
     if (result) {
       $("mediaLink").href = result.media;
-      $("mediaLink").textContent = result.media;
+      $("mediaLink").textContent = result.media.length > 80 ? result.media.slice(0, 80) + "…" : result.media;
       $("parseResult").classList.remove("hidden");
-      setStatus("parseStatus", "✅ 解析成功（" + result.source + "）" + (result.title ? "｜" + result.title : ""), "ok");
+      setStatus("parseStatus",
+        "✅ 解析成功（" + result.source + "）" +
+        (result.title ? "｜《" + result.title.slice(0, 30) + "》" : "") +
+        (result.author ? "｜@" + result.author : "") +
+        "，点击链接下载视频后去 JotMe 转写", "ok");
     } else {
       $("parseResult").classList.add("hidden");
       setStatus("parseStatus",
-        "⚠️ 自动解析暂不可用（免费源被拦/失效）。兜底方案：① 直接在本页「上传媒体文件」拿去 JotMe；② 复制链接到任意抖音解析站下载后上传。",
+        "⚠️ 自动解析全部通道不可用（免费源失效或代理限流，通常过一会重试即可）。" +
+        "兜底：① 用「上传媒体文件」直接拿去 JotMe；② 或点下方按钮搜一个在线解析站手动下载。",
         "warn");
+      showManualParseLinks();
     }
+  }
+
+  function showManualParseLinks() {
+    const el = $("parseStatus");
+    const q = encodeURIComponent("抖音去水印解析 在线");
+    el.innerHTML =
+      '⚠️ 自动解析暂不可用（免费源失效或代理限流，通常稍后重试即可）。兜底：' +
+      '① 用「上传媒体文件」直接拿去 JotMe；② 或 <a href="https://www.bing.com/search?q=' + q + '" target="_blank" rel="noopener">点此搜索在线解析站 ↗</a>，把链接粘贴过去下载视频后回来上传。';
+    el.className = "status show warn";
   }
 
   // ---------- JotMe 跳转 ----------
