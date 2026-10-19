@@ -246,15 +246,28 @@
   }
 
   async function callLLM(provider, apiKey, transcript, style) {
-    const isDS = provider === "deepseek";
-    const endpoint = isDS ? "https://api.deepseek.com/chat/completions" : "https://api.openai.com/v1/chat/completions";
-    const model = isDS ? "deepseek-chat" : "gpt-4o-mini";
+    let endpoint, model;
+    if (provider === "deepseek") {
+      endpoint = "https://api.deepseek.com/chat/completions";
+      model = "deepseek-chat";
+    } else if (provider === "openrouter") {
+      endpoint = "https://openrouter.ai/api/v1/chat/completions";
+      model = ($("selOrModel") && $("selOrModel").value) || "google/gemma-4-31b-it:free";
+    } else {
+      endpoint = "https://api.openai.com/v1/chat/completions";
+      model = "gpt-4o-mini";
+    }
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 90000);
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey };
+    if (provider === "openrouter") {
+      headers["HTTP-Referer"] = location.origin;
+      headers["X-Title"] = "video2wechat";
+    }
     const r = await fetch(endpoint, {
       method: "POST",
       signal: ctrl.signal,
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + apiKey },
+      headers,
       body: JSON.stringify({
         model,
         messages: [
@@ -262,16 +275,49 @@
           { role: "user", content: buildUserPrompt(transcript, style) },
         ],
         temperature: 0.7,
-        response_format: isDS ? { type: "json_object" } : undefined,
+        response_format: provider === "deepseek" ? { type: "json_object" } : undefined,
       }),
     });
     clearTimeout(t);
     if (!r.ok) {
       const err = await r.text();
-      throw new Error("API " + r.status + "：" + err.slice(0, 200));
+      let hint = "";
+      if (r.status === 401) hint = "｜Key 无效：请检查是否复制完整（sk- 开头），或到平台重新生成一个 Key";
+      if (r.status === 402) hint = "｜余额不足：该平台需充值后才能调用";
+      if (r.status === 429) hint = "｜限流：免费模型有频率限制，稍等几十秒再试";
+      throw new Error("API " + r.status + "：" + err.slice(0, 160) + hint);
     }
     const j = await r.json();
     return j.choices[0].message.content;
+  }
+
+  // ---------- OpenRouter 免费模型列表（启动时拉取，失败用内置兜底） ----------
+  const OR_FALLBACK_MODELS = [
+    "google/gemma-4-31b-it:free",
+    "minimax/minimax-m3.1-flash:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+  ];
+  async function loadOrModels() {
+    const sel = $("selOrModel");
+    if (!sel) return;
+    let ids = OR_FALLBACK_MODELS;
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/models");
+      if (r.ok) {
+        const j = await r.json();
+        const free = (j.data || []).map((m) => m.id).filter((id) => id.endsWith(":free"));
+        if (free.length) {
+          // 优先保留内置推荐的中文友好模型
+          ids = [...OR_FALLBACK_MODELS.filter((m) => free.includes(m)), ...free.filter((m) => !OR_FALLBACK_MODELS.includes(m))];
+        }
+      }
+    } catch (e) { /* 拉取失败 → 用兜底列表 */ }
+    sel.innerHTML = "";
+    ids.forEach((id) => {
+      const o = document.createElement("option");
+      o.value = id; o.textContent = id.replace(":free", "（免费）");
+      sel.appendChild(o);
+    });
   }
 
   function parseModelOutput(text) {
@@ -291,21 +337,24 @@
     if (!transcript) { setStatus("rewriteStatus", "请先在步骤 2 粘贴转写文字", "warn"); return; }
     const provider = $("selProvider").value;
     const style = $("selStyle").value;
+    // Key 按提供商分开存，避免切换模型时互相覆盖
     let apiKey = ($("inpKey").value || "").trim();
+    const keyLSKey = "v2w_key_" + provider;
     if (!apiKey) {
-      apiKey = (LS.getItem("v2w_key") || "").trim();
+      apiKey = (LS.getItem(keyLSKey) || "").trim();
       if (apiKey) $("inpKey").value = apiKey;
     }
-    if (!apiKey) { setStatus("rewriteStatus", "请填写 API Key（DeepSeek 或 OpenAI）", "warn"); return; }
+    if (!apiKey) { setStatus("rewriteStatus", "请填写 API Key（DeepSeek / OpenAI / OpenRouter）", "warn"); return; }
 
-    setStatus("rewriteStatus", "正在调用 " + (provider === "deepseek" ? "DeepSeek" : "OpenAI") + " 改写（" + $("selStyle").selectedOptions[0].text + "）…", "info");
+    const providerName = provider === "deepseek" ? "DeepSeek" : provider === "openrouter" ? "OpenRouter(" + ($("selOrModel") && $("selOrModel").value || "free") + ")" : "OpenAI";
+    setStatus("rewriteStatus", "正在调用 " + providerName + " 改写（" + $("selStyle").selectedOptions[0].text + "）…", "info");
     $("btnRewrite").disabled = true;
     try {
       const raw = await callLLM(provider, apiKey, transcript, style);
       const out = parseModelOutput(raw);
       $("inpArticle").value = out.html;
       if (out.title) $("inpTitle").value = out.title;
-      LS.setItem("v2w_key", apiKey);
+      LS.setItem(keyLSKey, apiKey);
       renderPreview();
       setStatus("rewriteStatus", "✅ 改写完成，可手动微调后推送", "ok");
     } catch (e) {
@@ -450,9 +499,18 @@
     $("btnSaveCfg").addEventListener("click", saveSettings);
     $("btnCloseCfg").addEventListener("click", () => $("settingsModal").classList.add("hidden"));
 
-    // 预填本地保存的 key
-    const k = LS.getItem("v2w_key");
-    if (k) $("inpKey").value = k;
+    // 预填本地保存的 key（按提供商分开）
+    function syncKeyField() {
+      const p = $("selProvider").value;
+      const k = LS.getItem("v2w_key_" + p) || "";
+      $("inpKey").value = k;
+      $("inpKey").placeholder = p === "openrouter" ? "sk-or-v1-...（OpenRouter Key）" : (p === "deepseek" ? "sk-...（DeepSeek Key）" : "sk-...（OpenAI Key）");
+      const orWrap = $("orModelWrap");
+      if (orWrap) orWrap.classList.toggle("hidden", p !== "openrouter");
+    }
+    $("selProvider").addEventListener("change", syncKeyField);
+    loadOrModels();
+    syncKeyField();
     renderPreview();
 
     console.log("[v2w] 工作台已就绪。Worker 地址：" + (LS.getItem("v2w_worker") || "（未配置，将用手动兜底）"));

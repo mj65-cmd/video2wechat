@@ -83,7 +83,7 @@
     <section class="card" data-step="3">
       <div class="card-head">
         <span class="badge">3</span>
-        <h2>AI 深度改写（DeepSeek / GPT）</h2>
+        <h2>AI 深度改写（DeepSeek / GPT / 免费模型）</h2>
         <button class="btn rerun" data-rerun="rewrite" title="重新改写">↻ 重跑</button>
       </div>
       <div class="card-body">
@@ -93,7 +93,12 @@
             <select id="selProvider" class="select">
               <option value="deepseek">DeepSeek (deepseek-chat)</option>
               <option value="openai">OpenAI (gpt-4o-mini)</option>
+              <option value="openrouter">OpenRouter（免费模型）</option>
             </select>
+          </label>
+          <label class="field inline hidden" id="orModelWrap">
+            <span>免费模型（启动时自动拉取）</span>
+            <select id="selOrModel" class="select"><option value="">加载中…</option></select>
           </label>
           <label class="field inline">
             <span>文风</span>
