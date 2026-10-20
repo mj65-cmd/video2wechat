@@ -333,19 +333,36 @@
   // ---------- 本地 Whisper（transformers.js，免 Key、无大小限制） ----------
   let _asr = null;
   async function transcribeLocal(mediaUrl, wbase) {
-    $("btnAutoTranscribe").disabled = true;
+    const btn = $("btnAutoTranscribe");
+    btn.disabled = true;
+    // 阶段 1：取媒体
+    let buf;
     try {
-      setStatus("parseStatus", "正在经 Worker 取回媒体（避免跨域）…", "info");
+      setStatus("parseStatus", "【1/4】正在经 Worker 取回媒体（大视频需等一会儿）…", "info");
       const res = await fetch(wbase + "/api/media?url=" + encodeURIComponent(mediaUrl));
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        setStatus("parseStatus", "取回媒体失败：" + (j.errmsg || res.status) + "。可改用步骤 2 的「去 JotMe 转写」。", "warn");
-        return;
+        throw new Error("HTTP " + res.status + (j.errmsg ? "，" + j.errmsg : ""));
       }
-      const buf = await res.arrayBuffer();
-      setStatus("parseStatus", "正在解码音频…", "info");
-      const pcm = await decodeToMono16k(buf);
-      setStatus("parseStatus", "首次使用需下载语音模型（约百 MB，之后会缓存），请稍候…", "info");
+      buf = await res.arrayBuffer();
+    } catch (e) {
+      setStatus("parseStatus", "❌ 取媒体阶段失败：" + e.message + "。可能是网络中断，重试一次通常可恢复；反复失败请改用 JotMe。", "warn");
+      btn.disabled = false;
+      return;
+    }
+    // 阶段 2：解码音频
+    let pcm;
+    try {
+      setStatus("parseStatus", "【2/4】正在解码音频…", "info");
+      pcm = await decodeToMono16k(buf);
+    } catch (e) {
+      setStatus("parseStatus", "❌ 音频解码失败（浏览器解不开该视频的音轨）。请改用步骤 2 的「去 JotMe 转写」。", "warn");
+      btn.disabled = false;
+      return;
+    }
+    // 阶段 3：加载转写库 + 模型
+    try {
+      setStatus("parseStatus", "【3/4】正在准备本地转写引擎…", "info");
       if (!_asr) {
         // 转写库 ESM 多源降级：国内镜像优先，jsdelivr / esm.sh 兜底
         const cdns = [
@@ -364,20 +381,28 @@
           quantized: true,
           progress_callback: (p) => {
             if (p && p.status === "progress" && p.total) {
-              setStatus("parseStatus", "正在下载语音模型 " + Math.round((p.loaded || 0) / 1048576) + "/" + Math.round(p.total / 1048576) + " MB（之后会缓存，仅首次）…", "info");
+              setStatus("parseStatus", "【3/4】正在下载语音模型 " + Math.round((p.loaded || 0) / 1048576) + "/" + Math.round(p.total / 1048576) + " MB（之后会缓存，仅首次）…", "info");
             }
           },
         });
       }
-      setStatus("parseStatus", "正在本地转写（CPU 运算，可能较慢，请耐心等待）…", "info");
+    } catch (e) {
+      setStatus("parseStatus", "❌ 加载转写引擎失败：" + e.message + "。重试一次；反复失败请改用 JotMe。", "warn");
+      btn.disabled = false;
+      return;
+    }
+    // 阶段 4：推理转写
+    try {
+      setStatus("parseStatus", "【4/4】正在本地转写（CPU 运算，" + Math.round(pcm.length / 16000 / 60) + " 分钟的音频约需 1~5 分钟，请勿关闭页面）…", "info");
       const out = await _asr(pcm, { language: "chinese", task: "transcribe", chunk_length_s: 30 });
       const text = (out && out.text) || "";
       if (!text) { setStatus("parseStatus", "本地转写未返回文字，可改用步骤 2 的「去 JotMe 转写」。", "warn"); return; }
       $("inpTranscript").value = text;
       setStatus("parseStatus", "✅ 本地 Whisper 转写完成（无需任何 Key），文字已回填到步骤 2。", "ok");
     } catch (e) {
-      setStatus("parseStatus", "本地转写异常：" + e.message + "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
+      setStatus("parseStatus", "❌ 转写运算失败：" + e.message + "。可重试，或改用 JotMe。", "warn");
     }
+    btn.disabled = false;
   }
 
   // 解码媒体为 16kHz 单声道 Float32（Whisper 所需）

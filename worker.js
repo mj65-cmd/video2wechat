@@ -221,13 +221,17 @@ export default {
       const target = url.searchParams.get("url") || "";
       if (!target) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 url 参数" }), { status: 400, headers: cors() });
       try {
-        const r = await fetch(target, { headers: { "User-Agent": MOBILE_UA } });
-        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
-        const ct = r.headers.get("content-type") || "application/octet-stream";
-        const buf = await r.arrayBuffer();
-        return new Response(buf, {
-          headers: { ...cors(), "Content-Type": ct, "Content-Length": String(buf.byteLength) },
+        const r = await fetch(target, {
+          headers: { "User-Agent": MOBILE_UA, "Referer": "https://www.douyin.com/" },
+          redirect: "follow",
         });
+        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
+        // 流式转发：不把视频读进 Worker 内存（大视频会撞 128MB 内存上限导致崩溃）
+        const ct = r.headers.get("content-type") || "application/octet-stream";
+        const h = { ...cors(), "Content-Type": ct, "Cache-Control": "no-store" };
+        const cl = r.headers.get("content-length");
+        if (cl) h["Content-Length"] = cl;
+        return new Response(r.body, { headers: h });
       } catch (e) {
         return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
       }
