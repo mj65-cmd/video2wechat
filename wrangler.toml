@@ -1,6 +1,7 @@
 name = "video2wechat-bridge"
 main = "worker.js"
 compatibility_date = "2024-09-23"
+account_id = "185a4129d9caa5362b4aa0c7a8727d01"
 
 # 密钥请用 secret 注入，不要写在这里：
 #   wrangler secret put WECHAT_APPID

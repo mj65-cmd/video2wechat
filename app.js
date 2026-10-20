@@ -8,12 +8,19 @@
   const $ = (id) => document.getElementById(id);
   const LS = window.localStorage;
 
+  // 默认 Worker 地址（已部署，解析走服务端中转，最稳）。用户可在「配置」里覆盖。
+  const DEFAULT_WORKER = "https://video2wechat-bridge.moujian65.workers.dev";
+
   // 读取 Worker 根地址（配置里存的是根地址，如 https://xxx.workers.dev）
   function getWorkerBase() {
     let v = (LS.getItem("v2w_worker") || "").trim().replace(/\/+$/, "");
-    if (!v) return "";
+    if (!v) v = DEFAULT_WORKER;
     if (v.endsWith("/api/wechat/draft")) v = v.replace(/\/api\/wechat\/draft$/, "");
     return v;
+  }
+  // 用户是否「显式」配置过 Worker（用于推送：没配微信密钥前，默认 Worker 不接推送）
+  function userConfiguredWorker() {
+    return !!(LS.getItem("v2w_worker") || "").trim();
   }
 
   function setStatus(elId, msg, type) {
@@ -447,8 +454,8 @@
     if (!html) { setStatus("pushStatus", "请先完成改写生成成稿", "warn"); return; }
 
     const wbase = getWorkerBase();
-    if (!wbase) {
-      // 兜底：复制 + 开后台
+    if (!userConfiguredWorker()) {
+      // 兜底：复制 + 开后台（默认 Worker 未配微信密钥，推送走手动）
       return manualPush(html, title);
     }
     setStatus("pushStatus", "正在通过 Worker 推送到草稿箱…", "info");
@@ -503,7 +510,7 @@
   }
 
   // ---------- 配置弹窗 ----------
-  function openSettings() { $("cfgWorker").value = LS.getItem("v2w_worker") || ""; $("settingsModal").classList.remove("hidden"); }
+  function openSettings() { $("cfgWorker").value = LS.getItem("v2w_worker") || DEFAULT_WORKER; $("settingsModal").classList.remove("hidden"); }
   function saveSettings() {
     const v = ($("cfgWorker").value || "").trim();
     if (v) LS.setItem("v2w_worker", v); else LS.removeItem("v2w_worker");
