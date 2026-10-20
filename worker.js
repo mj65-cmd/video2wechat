@@ -183,6 +183,39 @@ export default {
       }
     }
 
+    // ---- 转写端点（解析后直接转写，免去下载→上传 JotMe）----
+    if (url.pathname === "/api/transcribe" && request.method === "POST") {
+      let body;
+      try { body = await request.json(); }
+      catch { return new Response(JSON.stringify({ errcode: 1, errmsg: "请求体不是合法 JSON" }), { status: 400, headers: cors() }); }
+      const { url: mediaUrl, apiKey, model = "whisper-1" } = body;
+      if (!mediaUrl || !apiKey)
+        return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 media url 或 OpenAI apiKey" }), { status: 400, headers: cors() });
+      try {
+        const mediaRes = await fetch(mediaUrl, { headers: { "User-Agent": MOBILE_UA } });
+        if (!mediaRes.ok)
+          return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + mediaRes.status + "）" }), { status: 502, headers: cors() });
+        const buf = await mediaRes.arrayBuffer();
+        if (buf.byteLength > 25 * 1024 * 1024)
+          return new Response(JSON.stringify({ errcode: 3, errmsg: "媒体超过 25MB（OpenAI 限制），请用 JotMe 手动转写" }), { status: 413, headers: cors() });
+        const contentType = mediaRes.headers.get("content-type") || "video/mp4";
+        const form = new FormData();
+        form.append("file", new Blob([buf], { type: contentType }), "media.mp4");
+        form.append("model", model);
+        form.append("response_format", "json");
+        const tr = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+          method: "POST",
+          headers: { "Authorization": "Bearer " + apiKey },
+          body: form,
+        });
+        const tj = await tr.json();
+        if (!tr.ok) return new Response(JSON.stringify({ errcode: tr.status, errmsg: (tj.error && tj.error.message) || "转写请求失败" }), { status: 502, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 0, text: tj.text || "" }), { headers: cors() });
+      } catch (e) {
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 502, headers: cors() });
+      }
+    }
+
     return new Response("Not Found", { status: 404, headers: cors() });
   },
 };

@@ -230,6 +230,7 @@
     if (result) {
       $("mediaLink").href = result.media;
       $("mediaLink").textContent = result.media.length > 80 ? result.media.slice(0, 80) + "…" : result.media;
+      window.__lastMedia = result.media;
       $("parseResult").classList.remove("hidden");
       setStatus("parseStatus",
         "✅ 解析成功（" + result.source + "）" +
@@ -281,6 +282,51 @@
   function openJotMe() {
     const type = $("jotmeType").value; // video-to-text / audio-to-text
     window.open("https://translate.jotme.io/zh-cn/" + type, "_blank", "noopener");
+  }
+
+  // ---------- 解析后直接转写（OpenAI 服务端） ----------
+  async function doAutoTranscribe() {
+    const media = window.__lastMedia;
+    if (!media) { setStatus("parseStatus", "请先解析成功，再点直接转写", "warn"); return; }
+
+    const wbase = getWorkerBase();
+    if (!wbase) {
+      setStatus("parseStatus", "直接转写需走 Worker 服务端（避免浏览器 CORS）。当前未配置 Worker，请先在「⚙ 配置」填入 Worker 根地址。", "warn");
+      return;
+    }
+
+    // 取 OpenAI Key：优先用步骤3输入框里 provider=openai 时的 Key
+    const provider = ($("selProvider") && $("selProvider").value) || "openai";
+    const apiKey = ($("inpKey") && ($("inpKey").value || "").trim()) || "";
+    if (!apiKey) {
+      setStatus("parseStatus", "请先在步骤 3 选 OpenAI 并填入你的 API Key（与改写共用），再点直接转写。", "warn");
+      return;
+    }
+    if (provider !== "openai") {
+      setStatus("parseStatus", "当前模型提供方不是 OpenAI，转写接口仅支持 OpenAI。请到步骤 3 把「模型」切到 OpenAI 并填 Key。", "warn");
+      return;
+    }
+
+    $("btnAutoTranscribe").disabled = true;
+    setStatus("parseStatus", "正在经 Worker 拉取媒体并调用 OpenAI 转写（无需你下载）…", "info");
+    try {
+      const r = await fetch(wbase + "/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: media, apiKey, model: "whisper-1" }),
+      });
+      const j = await r.json();
+      if (j && j.errcode === 0 && j.text) {
+        $("inpTranscript").value = j.text;
+        setStatus("parseStatus", "✅ 转写完成，文字已回填到步骤 2，可直接点「采用此文字进入改写」。", "ok");
+      } else {
+        setStatus("parseStatus", "转写失败：" + (j && j.errmsg ? j.errmsg : "未知错误") +
+          "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
+      }
+    } catch (e) {
+      setStatus("parseStatus", "转写请求异常：" + e.message + "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
+    }
+    $("btnAutoTranscribe").disabled = false;
   }
 
   // ---------- 改写（DeepSeek / OpenAI） ----------
@@ -544,6 +590,7 @@
     $("btnParse").addEventListener("click", doParse);
     $("btnOpenParser").addEventListener("click", () => openParserTool("https://parsedock.kitt.tools/douyin"));
     $("btnJotMe").addEventListener("click", openJotMe);
+    $("btnAutoTranscribe").addEventListener("click", doAutoTranscribe);
     $("btnUseTranscript").addEventListener("click", () => setStatus("transcriptStatus", "✅ 已采用，可到步骤 3 改写", "ok"));
     $("btnRewrite").addEventListener("click", doRewrite);
     $("inpArticle").addEventListener("input", renderPreview);

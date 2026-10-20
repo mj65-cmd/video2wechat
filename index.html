@@ -51,7 +51,11 @@
         <div id="parseResult" class="result hidden">
           <p>✅ 解析成功，拿到媒体直链：</p>
           <a id="mediaLink" href="#" target="_blank" rel="noopener">打开 / 下载媒体</a>
-          <p class="hint">提示：可直接把该文件下载后上传到 JotMe；或本工具的「去 JotMe 转写」按钮也支持直接传视频。</p>
+          <div class="row" style="margin-top:10px">
+            <button id="btnAutoTranscribe" class="btn primary">🎙 直接转写（无需下载）</button>
+            <span class="hint">用 OpenAI 语音接口在服务端完成转写，文字自动回填到步骤 2；需先在步骤 3 选 OpenAI 并填 Key。</span>
+          </div>
+          <p class="hint" style="margin-top:6px">提示：若视频 &gt;25MB 或不想用 OpenAI，仍可点下方步骤 2 的「去 JotMe 转写」手动上传。</p>
         </div>
       </div>
     </section>
