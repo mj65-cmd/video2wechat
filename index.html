@@ -53,9 +53,9 @@
           <a id="mediaLink" href="#" target="_blank" rel="noopener">打开 / 下载媒体</a>
           <div class="row" style="margin-top:10px">
             <button id="btnAutoTranscribe" class="btn primary">🎙 直接转写（无需下载）</button>
-            <span class="hint">用 OpenAI 语音接口在服务端完成转写，文字自动回填到步骤 2；需先在步骤 3 选 OpenAI 并填 Key。</span>
+            <span class="hint">填了 OpenAI Key 走服务端快速转写；没填 Key 也能用，自动改走「本地 Whisper（浏览器离线、免 Key、不限大小）」，文字自动回填到步骤 2。</span>
           </div>
-          <p class="hint" style="margin-top:6px">提示：若视频 &gt;25MB 或不想用 OpenAI，仍可点下方步骤 2 的「去 JotMe 转写」手动上传。</p>
+          <p class="hint" style="margin-top:6px">提示：本地转写首次会下载约百 MB 语音模型（之后缓存），用 CPU 跑、较慢；大视频或想更快可先在步骤 3 填 OpenAI Key。仍想手动则用去 JotMe 转写。</p>
         </div>
       </div>
     </section>

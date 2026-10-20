@@ -216,6 +216,23 @@ export default {
       }
     }
 
+    // ---- 媒体代理（本地 Whisper 取媒体，绕开浏览器跨域）----
+    if (url.pathname === "/api/media" && request.method === "GET") {
+      const target = url.searchParams.get("url") || "";
+      if (!target) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 url 参数" }), { status: 400, headers: cors() });
+      try {
+        const r = await fetch(target, { headers: { "User-Agent": MOBILE_UA } });
+        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
+        const ct = r.headers.get("content-type") || "application/octet-stream";
+        const buf = await r.arrayBuffer();
+        return new Response(buf, {
+          headers: { ...cors(), "Content-Type": ct, "Content-Length": String(buf.byteLength) },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
+      }
+    }
+
     return new Response("Not Found", { status: 404, headers: cors() });
   },
 };

@@ -284,49 +284,110 @@
     window.open("https://translate.jotme.io/zh-cn/" + type, "_blank", "noopener");
   }
 
-  // ---------- 解析后直接转写（OpenAI 服务端） ----------
+  // ---------- 解析后直接转写（OpenAI 优先，无 Key 则本地 Whisper） ----------
   async function doAutoTranscribe() {
     const media = window.__lastMedia;
     if (!media) { setStatus("parseStatus", "请先解析成功，再点直接转写", "warn"); return; }
 
     const wbase = getWorkerBase();
     if (!wbase) {
-      setStatus("parseStatus", "直接转写需走 Worker 服务端（避免浏览器 CORS）。当前未配置 Worker，请先在「⚙ 配置」填入 Worker 根地址。", "warn");
+      setStatus("parseStatus", "直接转写需走 Worker（避免浏览器 CORS）。当前未配置 Worker，请先在「⚙ 配置」填入 Worker 根地址。", "warn");
       return;
     }
 
-    // 取 OpenAI Key：优先用步骤3输入框里 provider=openai 时的 Key
     const provider = ($("selProvider") && $("selProvider").value) || "openai";
     const apiKey = ($("inpKey") && ($("inpKey").value || "").trim()) || "";
-    if (!apiKey) {
-      setStatus("parseStatus", "请先在步骤 3 选 OpenAI 并填入你的 API Key（与改写共用），再点直接转写。", "warn");
-      return;
-    }
-    if (provider !== "openai") {
-      setStatus("parseStatus", "当前模型提供方不是 OpenAI，转写接口仅支持 OpenAI。请到步骤 3 把「模型」切到 OpenAI 并填 Key。", "warn");
+
+    // 有 OpenAI Key → 服务端快速转写
+    if (apiKey && provider === "openai") {
+      $("btnAutoTranscribe").disabled = true;
+      setStatus("parseStatus", "正在经 Worker 调用 OpenAI 转写（无需你下载）…", "info");
+      try {
+        const r = await fetch(wbase + "/api/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: media, apiKey, model: "whisper-1" }),
+        });
+        const j = await r.json();
+        if (j && j.errcode === 0 && j.text) {
+          $("inpTranscript").value = j.text;
+          setStatus("parseStatus", "✅ 转写完成，文字已回填到步骤 2，可直接点「采用此文字进入改写」。", "ok");
+        } else if (j && j.errcode === 3) {
+          setStatus("parseStatus", "媒体超过 25MB，OpenAI 通道不可用，自动改走「本地 Whisper（无需 Key）」…", "info");
+          await transcribeLocal(media, wbase);
+        } else {
+          setStatus("parseStatus", "OpenAI 转写失败：" + (j && j.errmsg ? j.errmsg : "未知错误") + "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
+        }
+      } catch (e) {
+        setStatus("parseStatus", "转写请求异常：" + e.message + "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
+      }
+      $("btnAutoTranscribe").disabled = false;
       return;
     }
 
-    $("btnAutoTranscribe").disabled = true;
-    setStatus("parseStatus", "正在经 Worker 拉取媒体并调用 OpenAI 转写（无需你下载）…", "info");
-    try {
-      const r = await fetch(wbase + "/api/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: media, apiKey, model: "whisper-1" }),
-      });
-      const j = await r.json();
-      if (j && j.errcode === 0 && j.text) {
-        $("inpTranscript").value = j.text;
-        setStatus("parseStatus", "✅ 转写完成，文字已回填到步骤 2，可直接点「采用此文字进入改写」。", "ok");
-      } else {
-        setStatus("parseStatus", "转写失败：" + (j && j.errmsg ? j.errmsg : "未知错误") +
-          "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
-      }
-    } catch (e) {
-      setStatus("parseStatus", "转写请求异常：" + e.message + "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
-    }
+    // 无 OpenAI Key（或不是 OpenAI）→ 本地 Whisper，零门槛
+    await transcribeLocal(media, wbase);
     $("btnAutoTranscribe").disabled = false;
+  }
+
+  // ---------- 本地 Whisper（transformers.js，免 Key、无大小限制） ----------
+  let _asr = null;
+  async function transcribeLocal(mediaUrl, wbase) {
+    $("btnAutoTranscribe").disabled = true;
+    try {
+      setStatus("parseStatus", "正在经 Worker 取回媒体（避免跨域）…", "info");
+      const res = await fetch(wbase + "/api/media?url=" + encodeURIComponent(mediaUrl));
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setStatus("parseStatus", "取回媒体失败：" + (j.errmsg || res.status) + "。可改用步骤 2 的「去 JotMe 转写」。", "warn");
+        return;
+      }
+      const buf = await res.arrayBuffer();
+      setStatus("parseStatus", "正在解码音频…", "info");
+      const pcm = await decodeToMono16k(buf);
+      setStatus("parseStatus", "首次使用需下载语音模型（约百 MB，之后会缓存），请稍候…", "info");
+      if (!_asr) {
+        const mod = await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@1.6.0");
+        _asr = await mod.pipeline("automatic-speech-recognition", "Xenova/whisper-base", { quantized: true });
+      }
+      setStatus("parseStatus", "正在本地转写（CPU 运算，可能较慢，请耐心等待）…", "info");
+      const out = await _asr(pcm, { language: "chinese", task: "transcribe", chunk_length_s: 30 });
+      const text = (out && out.text) || "";
+      if (!text) { setStatus("parseStatus", "本地转写未返回文字，可改用步骤 2 的「去 JotMe 转写」。", "warn"); return; }
+      $("inpTranscript").value = text;
+      setStatus("parseStatus", "✅ 本地 Whisper 转写完成（无需任何 Key），文字已回填到步骤 2。", "ok");
+    } catch (e) {
+      setStatus("parseStatus", "本地转写异常：" + e.message + "。可改用步骤 2 的「去 JotMe 转写」手动上传。", "warn");
+    }
+  }
+
+  // 解码媒体为 16kHz 单声道 Float32（Whisper 所需）
+  async function decodeToMono16k(arrayBuffer) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    let audioBuf;
+    try {
+      audioBuf = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    } finally {
+      ctx.close().catch(() => {});
+    }
+    const chs = audioBuf.numberOfChannels;
+    let mono;
+    if (chs > 1) {
+      mono = new Float32Array(audioBuf.length);
+      for (let c = 0; c < chs; c++) {
+        const d = audioBuf.getChannelData(c);
+        for (let i = 0; i < mono.length; i++) mono[i] += d[i] / chs;
+      }
+    } else {
+      mono = audioBuf.getChannelData(0);
+    }
+    const targetRate = 16000;
+    const ratio = audioBuf.sampleRate / targetRate;
+    const newLen = Math.max(1, Math.floor(mono.length / ratio));
+    const out = new Float32Array(newLen);
+    for (let i = 0; i < newLen; i++) out[i] = mono[Math.floor(i * ratio)] || 0;
+    return out;
   }
 
   // ---------- 改写（DeepSeek / OpenAI） ----------
