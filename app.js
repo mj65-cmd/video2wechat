@@ -347,8 +347,27 @@
       const pcm = await decodeToMono16k(buf);
       setStatus("parseStatus", "首次使用需下载语音模型（约百 MB，之后会缓存），请稍候…", "info");
       if (!_asr) {
-        const mod = await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@1.6.0");
-        _asr = await mod.pipeline("automatic-speech-recognition", "Xenova/whisper-base", { quantized: true });
+        // 转写库 ESM 多源降级：国内镜像优先，jsdelivr / esm.sh 兜底
+        const cdns = [
+          "https://registry.npmmirror.com/@xenova/transformers/2.17.2/files/dist/transformers.min.js",
+          "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/+esm",
+          "https://esm.sh/@xenova/transformers@2.17.2",
+        ];
+        let mod = null, lastErr = null;
+        for (const u of cdns) {
+          try { mod = await import(u); break; } catch (e) { lastErr = e; }
+        }
+        if (!mod) throw new Error("转写库无法加载（三个源均不可达：" + (lastErr && lastErr.message) + "）");
+        // 模型文件走国内可访问的 HF 镜像，避免 huggingface.co 连不上
+        try { if (mod.env) mod.env.remoteHost = "https://hf-mirror.com"; } catch (e) { /* 保留默认 */ }
+        _asr = await mod.pipeline("automatic-speech-recognition", "Xenova/whisper-base", {
+          quantized: true,
+          progress_callback: (p) => {
+            if (p && p.status === "progress" && p.total) {
+              setStatus("parseStatus", "正在下载语音模型 " + Math.round((p.loaded || 0) / 1048576) + "/" + Math.round(p.total / 1048576) + " MB（之后会缓存，仅首次）…", "info");
+            }
+          },
+        });
       }
       setStatus("parseStatus", "正在本地转写（CPU 运算，可能较慢，请耐心等待）…", "info");
       const out = await _asr(pcm, { language: "chinese", task: "transcribe", chunk_length_s: 30 });
