@@ -251,35 +251,8 @@
     const q = encodeURIComponent("抖音去水印解析 在线");
     el.innerHTML =
       '⚠️ 自动解析暂不可用（免费源失效或代理限流，通常稍后重试即可）。兜底：' +
-      '① 用「上传媒体文件」直接拿去 JotMe；② 或 <a href="https://douyin.wtf/" target="_blank" rel="noopener">打开在线解析站 ↗</a> / ' +
-      '<a href="https://www.bing.com/search?q=' + q + '" target="_blank" rel="noopener">换个解析站 ↗</a>，' +
-      '链接已复制的话直接粘贴过去，下载视频后回来上传。';
+      '① 用「上传媒体文件」直接拿去 JotMe；② 或 <a href="https://www.bing.com/search?q=' + q + '" target="_blank" rel="noopener">点此搜索在线解析站 ↗</a>，把链接粘贴过去下载视频后回来上传。';
     el.className = "status show warn";
-  }
-
-  // ---------- 在线解析站跳转（手动兜底） ----------
-  function copyLinkToClipboard(text) {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).catch(() => {});
-      }
-    } catch (e) { /* 忽略复制失败，不阻断跳转 */ }
-  }
-
-  function openParserSite(alt) {
-    const raw = ($("inpUrl").value || "").trim();
-    const urls = extractUrls(raw);
-    let copied = false;
-    if (urls.length) { copyLinkToClipboard(urls[0]); copied = true; }
-    if (alt) {
-      window.open("https://www.bing.com/search?q=" + encodeURIComponent("抖音去水印解析 在线"), "_blank", "noopener");
-    } else {
-      window.open("https://douyin.wtf/", "_blank", "noopener");
-    }
-    setStatus("parseStatus",
-      "已在新标签页打开" + (alt ? "解析站搜索" : "在线解析站") +
-      (copied ? "，你的抖音链接已复制到剪贴板，直接粘贴即可" : "，把抖音视频链接粘贴到该网站") +
-      "，下载视频后回到本页用「上传媒体文件」继续。", "info");
   }
 
   // ---------- JotMe 跳转 ----------
@@ -547,8 +520,6 @@
   // ---------- 事件绑定 ----------
   document.addEventListener("DOMContentLoaded", function () {
     $("btnParse").addEventListener("click", doParse);
-    $("btnOpenParser").addEventListener("click", () => openParserSite(false));
-    $("btnOpenParserAlt").addEventListener("click", () => openParserSite(true));
     $("btnJotMe").addEventListener("click", openJotMe);
     $("btnUseTranscript").addEventListener("click", () => setStatus("transcriptStatus", "✅ 已采用，可到步骤 3 改写", "ok"));
     $("btnRewrite").addEventListener("click", doRewrite);
