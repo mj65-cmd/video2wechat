@@ -251,8 +251,30 @@
     const q = encodeURIComponent("抖音去水印解析 在线");
     el.innerHTML =
       '⚠️ 自动解析暂不可用（免费源失效或代理限流，通常稍后重试即可）。兜底：' +
-      '① 用「上传媒体文件」直接拿去 JotMe；② 或 <a href="https://www.bing.com/search?q=' + q + '" target="_blank" rel="noopener">点此搜索在线解析站 ↗</a>，把链接粘贴过去下载视频后回来上传。';
+      '① 用「上传媒体文件」直接拿去 JotMe；② 或 <a href="https://parsedock.kitt.tools/douyin" target="_blank" rel="noopener">打开 ParseDock 解析 ↗</a> / ' +
+      '<a href="https://www.bing.com/search?q=' + q + '" target="_blank" rel="noopener">搜索其他解析站 ↗</a>，把链接粘贴过去下载视频后回来上传。';
     el.className = "status show warn";
+  }
+
+  // ---------- 打开指定的解析工具（手动兜底） ----------
+  function copyLinkToClipboard(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+    } catch (e) { /* 忽略复制失败，不阻断跳转 */ }
+  }
+
+  function openParserTool(url) {
+    const raw = ($("inpUrl").value || "").trim();
+    const urls = extractUrls(raw);
+    let copied = false;
+    if (urls.length) { copyLinkToClipboard(urls[0]); copied = true; }
+    window.open(url, "_blank", "noopener");
+    setStatus("parseStatus",
+      "已在新标签页打开 ParseDock 解析" +
+      (copied ? "，你的抖音链接已复制到剪贴板，直接粘贴即可" : "，把抖音视频链接（v.douyin.com 或 douyin.com/video/...）粘贴到该网站") +
+      "，下载视频后回到本页用「上传媒体文件」继续。", "info");
   }
 
   // ---------- JotMe 跳转 ----------
@@ -520,6 +542,7 @@
   // ---------- 事件绑定 ----------
   document.addEventListener("DOMContentLoaded", function () {
     $("btnParse").addEventListener("click", doParse);
+    $("btnOpenParser").addEventListener("click", () => openParserTool("https://parsedock.kitt.tools/douyin"));
     $("btnJotMe").addEventListener("click", openJotMe);
     $("btnUseTranscript").addEventListener("click", () => setStatus("transcriptStatus", "✅ 已采用，可到步骤 3 改写", "ok"));
     $("btnRewrite").addEventListener("click", doRewrite);
