@@ -375,16 +375,32 @@
           try { mod = await import(u); break; } catch (e) { lastErr = e; }
         }
         if (!mod) throw new Error("转写库无法加载（三个源均不可达：" + (lastErr && lastErr.message) + "）");
-        // 模型文件走国内可访问的 HF 镜像，避免 huggingface.co 连不上
-        try { if (mod.env) mod.env.remoteHost = "https://hf-mirror.com"; } catch (e) { /* 保留默认 */ }
-        _asr = await mod.pipeline("automatic-speech-recognition", "Xenova/whisper-base", {
-          quantized: true,
-          progress_callback: (p) => {
-            if (p && p.status === "progress" && p.total) {
-              setStatus("parseStatus", "【3/4】正在下载语音模型 " + Math.round((p.loaded || 0) / 1048576) + "/" + Math.round(p.total / 1048576) + " MB（之后会缓存，仅首次）…", "info");
+        // 模型 + wasm 全部经我们自己的 Worker 中转（浏览器→Worker 这条路已被解析功能验证稳定）
+        let loadErrs = [];
+        for (const cfg of [
+          { name: "Worker中转", host: wbase + "/api/hf", wasm: wbase + "/api/ort/" },
+          { name: "hf-mirror直连", host: "https://hf-mirror.com", wasm: null },
+        ]) {
+          try {
+            if (mod.env) {
+              mod.env.remoteHost = cfg.host;
+              try { if (cfg.wasm && mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm) mod.env.backends.onnx.wasm.wasmPaths = cfg.wasm; } catch (e) { /* 无此配置则保留默认 */ }
             }
-          },
-        });
+            _asr = await mod.pipeline("automatic-speech-recognition", "Xenova/whisper-base", {
+              quantized: true,
+              progress_callback: (p) => {
+                if (p && p.status === "progress" && p.total) {
+                  setStatus("parseStatus", "【3/4】正在下载语音模型 " + Math.round((p.loaded || 0) / 1048576) + "/" + Math.round(p.total / 1048576) + " MB（" + cfg.name + "，之后会缓存，仅首次）…", "info");
+                }
+              },
+            });
+            break;
+          } catch (e) {
+            loadErrs.push(cfg.name + ": " + (e.message || e));
+            _asr = null;
+          }
+        }
+        if (!_asr) throw new Error(loadErrs.join("；"));
       }
     } catch (e) {
       setStatus("parseStatus", "❌ 加载转写引擎失败：" + e.message + "。重试一次；反复失败请改用 JotMe。", "warn");

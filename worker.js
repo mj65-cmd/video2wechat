@@ -216,6 +216,40 @@ export default {
       }
     }
 
+    // ---- 转写引擎运行时 wasm 代理（transformers.js 默认从 jsdelivr 拉，国内不稳）----
+    if (url.pathname.startsWith("/api/ort/") && request.method === "GET") {
+      const file = url.pathname.slice("/api/ort/".length);
+      if (!file || file.includes("..") || file.includes("?")) return new Response(JSON.stringify({ errcode: 1, errmsg: "非法文件名" }), { status: 400, headers: cors() });
+      const target = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/" + file;
+      try {
+        const r = await fetch(target, { redirect: "follow" });
+        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "wasm 拉取失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
+        const h = { ...cors(), "Content-Type": r.headers.get("content-type") || "application/wasm", "Cache-Control": "public, max-age=86400" };
+        const cl = r.headers.get("content-length");
+        if (cl) h["Content-Length"] = cl;
+        return new Response(r.body, { headers: h });
+      } catch (e) {
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
+      }
+    }
+
+    // ---- 模型文件代理（直连 huggingface.co 官方源，Worker 边缘节点国际网络畅通）----
+    if (url.pathname.startsWith("/api/hf/") && request.method === "GET") {
+      const rest = url.pathname.slice("/api/hf/".length);
+      if (!rest || rest.includes("..")) return new Response(JSON.stringify({ errcode: 1, errmsg: "非法路径" }), { status: 400, headers: cors() });
+      const target = "https://huggingface.co/" + rest;
+      try {
+        const r = await fetch(target, { redirect: "follow" });
+        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "模型文件拉取失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
+        const h = { ...cors(), "Content-Type": r.headers.get("content-type") || "application/octet-stream", "Cache-Control": "public, max-age=86400" };
+        const cl = r.headers.get("content-length");
+        if (cl) h["Content-Length"] = cl;
+        return new Response(r.body, { headers: h });
+      } catch (e) {
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
+      }
+    }
+
     // ---- 媒体代理（本地 Whisper 取媒体，绕开浏览器跨域）----
     if (url.pathname === "/api/media" && request.method === "GET") {
       const target = url.searchParams.get("url") || "";
