@@ -522,7 +522,7 @@
       const chosen = sel.value;
       candidates.push(chosen);
       for (const o of sel.options) {
-        if (candidates.length >= 4) break;
+        if (candidates.length >= 6) break;
         if (o.value !== chosen && o.value.endsWith(":free")) candidates.push(o.value);
       }
     } else {
@@ -531,16 +531,23 @@
     let lastErr = null;
     for (let i = 0; i < candidates.length; i++) {
       const m = candidates[i];
-      setStatus("rewriteStatus", "正在调用 OpenRouter 改写（" + m.replace(":free", "") + "，第 " + (i + 1) + "/" + candidates.length + " 个候选，限流会自动换下一个）…", "info");
-      try {
-        return await callLLM("openrouter", apiKey, transcript, style, m);
-      } catch (e) {
-        lastErr = e;
-        if ((e.message || "").indexOf("429") !== -1) continue; // 限流 → 换下一个模型
-        throw e; // 其他错误（Key 无效等）直接报
+      // 每个候选模型遇 429 自动重试（上游高峰短暂拥堵，稍等即好），换下一个前先本模型重试 3 次
+      for (let attempt = 0; attempt < 3; attempt++) {
+        setStatus("rewriteStatus", "正在调用 OpenRouter 改写（" + m.replace(":free", "") + "，第 " + (i + 1) + "/" + candidates.length + " 个候选" + (attempt ? "，限流重试 " + attempt + "/2" : "") + "）…", "info");
+        try {
+          const raw = await callLLM("openrouter", apiKey, transcript, style, m);
+          return raw;
+        } catch (e) {
+          lastErr = e;
+          if ((e.message || "").indexOf("429") !== -1) {
+            if (attempt < 2) { await new Promise((r) => setTimeout(r, 3500)); continue; } // 等 3.5s 再试同一模型
+            break; // 同一模型 3 次都限流 → 换下一个候选
+          }
+          throw e; // 其他错误（Key 无效等）直接报
+        }
       }
     }
-    throw lastErr || new Error("所有免费候选模型均限流，请过几分钟再点一次");
+    throw lastErr || new Error("所有免费候选模型均限流，过 1~2 分钟再点一次即可（已自动换模型+退避重试）");
   }
 
   // ---------- OpenRouter 免费模型列表（启动时拉取，失败用内置兜底） ----------
@@ -738,6 +745,20 @@
     $("parseResult").classList.add("hidden");
     ["parseStatus","transcriptStatus","rewriteStatus","pushStatus"].forEach(hideStatus);
     $("preview").innerHTML = "<p class='hint'>（预览区）</p>";
+    // 清空已存盘的步骤内容（避免下次打开又恢复出来）
+    ["v2w_transcript","v2w_article","v2w_title"].forEach((k) => LS.removeItem(k));
+  }
+
+  // ---------- 步骤内容自动存盘（刷新/误关不丢进度） ----------
+  function saveWork() {
+    if (($("inpTranscript").value || "").trim()) LS.setItem("v2w_transcript", $("inpTranscript").value);
+    if (($("inpArticle").value || "").trim()) LS.setItem("v2w_article", $("inpArticle").value);
+    if (($("inpTitle").value || "").trim()) LS.setItem("v2w_title", $("inpTitle").value);
+  }
+  function restoreWork() {
+    const t = LS.getItem("v2w_transcript"); if (t) { $("inpTranscript").value = t; }
+    const a = LS.getItem("v2w_article"); if (a) { $("inpArticle").value = a; renderPreview(); }
+    const ti = LS.getItem("v2w_title"); if (ti) { $("inpTitle").value = ti; }
   }
 
   function handleRerun(kind) {
@@ -765,6 +786,8 @@
     $("btnRewrite").addEventListener("click", doRewrite);
     $("inpArticle").addEventListener("input", renderPreview);
     $("inpTitle").addEventListener("input", renderPreview);
+    // 步骤内容自动存盘：任一输入框变化即保存，刷新/误关不丢
+    ["inpTranscript","inpArticle","inpTitle"].forEach((id) => $(id).addEventListener("input", saveWork));
     $("btnPush").addEventListener("click", doPush);
     $("btnManual").addEventListener("click", () => manualPush($("inpArticle").value, $("inpTitle").value));
     $("btnClearAll").addEventListener("click", clearAll);
@@ -785,6 +808,7 @@
     $("selProvider").addEventListener("change", syncKeyField);
     loadOrModels();
     syncKeyField();
+    restoreWork(); // 恢复上次自动存盘的步骤内容（刷新/误关不丢）
     renderPreview();
 
     console.log("[v2w] 工作台已就绪。Worker 地址：" + (getWorkerBase() || "（未配置，将用手动兜底）"));
