@@ -514,6 +514,35 @@
     return j.choices[0].message.content;
   }
 
+  // ---------- OpenRouter 浏览器直连（带 429 自动换模型；云端不可用时兜底） ----------
+  async function directOpenRouter(apiKey, transcript, style) {
+    const sel = $("selOrModel");
+    const candidates = [];
+    if (sel) {
+      const chosen = sel.value;
+      candidates.push(chosen);
+      for (const o of sel.options) {
+        if (candidates.length >= 4) break;
+        if (o.value !== chosen && o.value.endsWith(":free")) candidates.push(o.value);
+      }
+    } else {
+      candidates.push("google/gemma-4-31b-it:free");
+    }
+    let lastErr = null;
+    for (let i = 0; i < candidates.length; i++) {
+      const m = candidates[i];
+      setStatus("rewriteStatus", "正在调用 OpenRouter 改写（" + m.replace(":free", "") + "，第 " + (i + 1) + "/" + candidates.length + " 个候选，限流会自动换下一个）…", "info");
+      try {
+        return await callLLM("openrouter", apiKey, transcript, style, m);
+      } catch (e) {
+        lastErr = e;
+        if ((e.message || "").indexOf("429") !== -1) continue; // 限流 → 换下一个模型
+        throw e; // 其他错误（Key 无效等）直接报
+      }
+    }
+    throw lastErr || new Error("所有免费候选模型均限流，请过几分钟再点一次");
+  }
+
   // ---------- OpenRouter 免费模型列表（启动时拉取，失败用内置兜底） ----------
   const OR_FALLBACK_MODELS = [
     "google/gemma-4-31b-it:free",
@@ -574,34 +603,23 @@
     try {
       let raw;
       if (provider === "openrouter") {
-        // 429 限流自动换模型：候选 = 你选的 + 下拉框里其余免费模型（最多试 4 个）
-        const sel = $("selOrModel");
-        const candidates = [];
-        if (sel) {
-          const chosen = sel.value;
-          candidates.push(chosen);
-          for (const o of sel.options) {
-            if (candidates.length >= 4) break;
-            if (o.value !== chosen && o.value.endsWith(":free")) candidates.push(o.value);
-          }
-        } else {
-          candidates.push("google/gemma-4-31b-it:free");
-        }
-        let lastErr = null;
-        for (let i = 0; i < candidates.length; i++) {
-          const m = candidates[i];
-          setStatus("rewriteStatus", "正在调用 OpenRouter 改写（" + m.replace(":free", "") + "，第 " + (i + 1) + "/" + candidates.length + " 个候选，限流会自动换下一个）…", "info");
-          try {
-            raw = await callLLM(provider, apiKey, transcript, style, m);
-            break;
-          } catch (e) {
-            lastErr = e;
-            if ((e.message || "").indexOf("429") !== -1) continue; // 限流 → 换下一个模型
-            throw e; // 其他错误（Key 无效等）直接报
+        // Key 优先用用户粘贴的；没粘贴则从云端 Worker 运行时获取（密钥存服务端，不进公开代码）
+        if (!apiKey) {
+          const wbase = getWorkerBase();
+          if (wbase) {
+            setStatus("rewriteStatus", "正在从云端获取 OpenRouter Key（无需粘贴）…", "info");
+            try {
+              const kr = await fetch(wbase + "/api/or-key");
+              const kj = await kr.json().catch(() => ({}));
+              if (kj && kj.key) apiKey = kj.key;
+            } catch (e) { /* 忽略，走下面提示 */ }
           }
         }
-        if (!raw) throw lastErr || new Error("所有免费候选模型均限流，请过几分钟再点一次");
+        if (!apiKey) { setStatus("rewriteStatus", "未获取到 OpenRouter Key：请在步骤3粘贴 Key，或确认 Worker 已部署。", "warn"); return; }
+        // 浏览器直连 OpenRouter（不受 Worker 执行时长限制，慢模型也能跑；429 自动换免费模型）
+        raw = await directOpenRouter(apiKey, transcript, style);
       } else {
+        if (!apiKey) { setStatus("rewriteStatus", "请填写 API Key（DeepSeek / OpenAI）", "warn"); return; }
         raw = await callLLM(provider, apiKey, transcript, style);
       }
       const out = parseModelOutput(raw);

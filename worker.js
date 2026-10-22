@@ -16,7 +16,7 @@
 
 let tokenCache = { token: null, expire: 0 };
 
-function cors() {
+function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -128,41 +128,136 @@ async function uploadThumb(accessToken, cover) {
   return j.media_id;
 }
 
+// ---------- 改写中转（OpenRouter 密钥放服务端，前端无需粘贴；限流自动换免费模型） ----------
+const REWRITE_STYLE = {
+  pro: "文风「专业干货」：结构清晰、逻辑严密，使用小标题分段；补充必要的行业背景，给出适用场景、优缺点与对比；语言准确克制，少用口语化表达。",
+  casual: "文风「轻松口语」：像和朋友聊技术一样自然，短句为主，适当使用 emoji 与反问；把专业概念讲得通俗好懂，保持亲切感。",
+  story: "文风「故事种草」：用一个具体的使用场景或痛点开场，带情绪与画面感，逐步引出工具/模型的价值，结尾给出行动建议；可读性强、有代入感。",
+};
+const REWRITE_SYSTEM =
+  "你是一名资深 AI 科普作者，擅长把 AI 模型与工具类知识写得通俗易懂又有深度。" +
+  "请基于用户提供的转写文字（可能口语化、有口误）进行深度改写，要求：" +
+  "1）忠实原意，不编造事实；2）为 AI 新手补充必要背景；3）给出具体例子或对比；4）给读者明确的「下一步」建议；" +
+  "5）输出可直接用于微信公众号的 HTML（仅用 h2/p/strong/em/ul-li/blockquote 等基础标签，不要外链样式、不要 script）；" +
+  "6）只返回一个 JSON 对象，格式：{\"title\":\"文章标题\",\"html\":\"<文章HTML>\"},不要任何额外说明。";
+const REWRITE_PREFERRED = [
+  "google/gemma-4-31b-it:free",
+  "minimax/minimax-m3.1-flash:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+];
+
+async function handleRewrite(request, env, corsHeaders) {
+  if (!env.OPENROUTER_KEY)
+    return new Response(JSON.stringify({ errcode: 1, errmsg: "Worker 未配置 OPENROUTER_KEY" }), { status: 500, headers: corsHeaders() });
+
+  // 轻量来源校验：仅允许来自本项目 Pages 域名的调用，避免公开端点被他人盗刷额度
+  const ref = request.headers.get("referer") || request.headers.get("origin") || "";
+  const host = new URL(request.url).host;
+  const allowed = ref.includes("mj65-cmd.github.io") || host.startsWith("localhost") || host.startsWith("127.0.0.1");
+  if (!allowed)
+    return new Response(JSON.stringify({ errcode: 1, errmsg: "来源不被允许（仅 mj65-cmd.github.io 可调用）" }), { status: 403, headers: corsHeaders() });
+
+  let body;
+  try { body = await request.json(); }
+  catch { return new Response(JSON.stringify({ errcode: 1, errmsg: "请求体不是合法 JSON" }), { status: 400, headers: corsHeaders() }); }
+
+  const transcript = (body.transcript || "").trim();
+  const style = body.style || "pro";
+  if (!transcript) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 transcript" }), { status: 400, headers: corsHeaders() });
+
+  // 拉取实时免费模型列表（prompt 价格为 0），失败则用内置兜底
+  let freeList = [];
+  try {
+    const mr = await fetch("https://openrouter.ai/api/v1/models");
+    const mj = await mr.json();
+    freeList = (mj.data || []).filter((m) => m.pricing && (parseFloat(m.pricing.prompt) || 0) === 0).map((m) => m.id);
+  } catch (e) { /* 用兜底 */ }
+  if (!freeList.length) freeList = REWRITE_PREFERRED.slice();
+  const ordered = [...REWRITE_PREFERRED.filter((m) => freeList.includes(m)), ...freeList.filter((m) => !REWRITE_PREFERRED.includes(m))].slice(0, 6);
+
+  const userPrompt = "目标文风：" + (REWRITE_STYLE[style] || REWRITE_STYLE.pro) + "\n\n以下是原始转写文字：\n" + transcript + "\n";
+
+  let lastErr = null;
+  for (const model of ordered) {
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + env.OPENROUTER_KEY,
+          "HTTP-Referer": "https://mj65-cmd.github.io/video2wechat/",
+          "X-Title": "video2wechat",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: REWRITE_SYSTEM },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.7,
+        }),
+      });
+      if (r.status === 429) { lastErr = model + " 限流"; continue; }
+      if (!r.ok) { const tx = await r.text(); lastErr = "HTTP " + r.status + " " + tx.slice(0, 120); continue; }
+      const j = await r.json();
+      const content = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+      if (!content) { lastErr = "空内容返回"; continue; }
+      // 原样返回 OpenRouter 响应，前端 parseModelOutput 可直接解析
+      return new Response(JSON.stringify(j), { headers: corsHeaders() });
+    } catch (e) {
+      lastErr = e.message;
+    }
+  }
+  return new Response(JSON.stringify({ errcode: 1, errmsg: "所有免费模型均失败：" + (lastErr || "未知") }), { status: 502, headers: corsHeaders() });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
+
+    // ---- 运行时下发 OpenRouter Key（密钥存服务端，前端运行时获取，不进公开代码）----
+    if (url.pathname === "/api/or-key" && request.method === "GET") {
+      if (!env.OPENROUTER_KEY)
+        return new Response(JSON.stringify({ errcode: 1, errmsg: "Worker 未配置 OPENROUTER_KEY" }), { status: 500, headers: corsHeaders() });
+      const ref = request.headers.get("referer") || request.headers.get("origin") || "";
+      const host = new URL(request.url).host;
+      const allowed = ref.includes("mj65-cmd.github.io") || host.startsWith("localhost") || host.startsWith("127.0.0.1");
+      if (!allowed)
+        return new Response(JSON.stringify({ errcode: 1, errmsg: "来源不被允许" }), { status: 403, headers: corsHeaders() });
+      return new Response(JSON.stringify({ key: env.OPENROUTER_KEY }), { headers: corsHeaders() });
+    }
 
     // ---- 解析端点 ----
     if (url.pathname === "/api/parse" && request.method === "GET") {
       const target = url.searchParams.get("url") || "";
-      if (!target) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 url 参数" }), { status: 400, headers: cors() });
+      if (!target) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 url 参数" }), { status: 400, headers: corsHeaders() });
       try {
         const res = await parseDouyin(target);
-        if (!res) return new Response(JSON.stringify({ errcode: 2, errmsg: "解析失败：链接无效或抖音已限制" }), { status: 200, headers: cors() });
-        return new Response(JSON.stringify({ errcode: 0, ...res }), { status: 200, headers: cors() });
+        if (!res) return new Response(JSON.stringify({ errcode: 2, errmsg: "解析失败：链接无效或抖音已限制" }), { status: 200, headers: corsHeaders() });
+        return new Response(JSON.stringify({ errcode: 0, ...res }), { status: 200, headers: corsHeaders() });
       } catch (e) {
-        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: corsHeaders() });
       }
     }
 
     // ---- 草稿箱端点 ----
     if (url.pathname === "/api/wechat/draft") {
-      if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405, headers: cors() });
+      if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405, headers: corsHeaders() });
       const appid = env.WECHAT_APPID, secret = env.WECHAT_SECRET;
-      if (!appid || !secret) return new Response(JSON.stringify({ errcode: 1, errmsg: "Worker 未配置 WECHAT_APPID/WECHAT_SECRET" }), { status: 500, headers: cors() });
+      if (!appid || !secret) return new Response(JSON.stringify({ errcode: 1, errmsg: "Worker 未配置 WECHAT_APPID/WECHAT_SECRET" }), { status: 500, headers: corsHeaders() });
 
       let body;
-      try { body = await request.json(); } catch { return new Response(JSON.stringify({ errcode: 1, errmsg: "请求体不是合法 JSON" }), { status: 400, headers: cors() }); }
+      try { body = await request.json(); } catch { return new Response(JSON.stringify({ errcode: 1, errmsg: "请求体不是合法 JSON" }), { status: 400, headers: corsHeaders() }); }
 
       const { title, content, digest = "", cover } = body;
-      if (!title || !content) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 title 或 content" }), { status: 400, headers: cors() });
+      if (!title || !content) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 title 或 content" }), { status: 400, headers: corsHeaders() });
 
       try {
         const token = await getAccessToken(appid, secret);
         const thumb_media_id = cover ? await uploadThumb(token, cover) : "";
-        if (!thumb_media_id) return new Response(JSON.stringify({ errcode: 1, errmsg: "未提供封面，无法创建草稿（微信要求 thumb_media_id）" }), { status: 400, headers: cors() });
+        if (!thumb_media_id) return new Response(JSON.stringify({ errcode: 1, errmsg: "未提供封面，无法创建草稿（微信要求 thumb_media_id）" }), { status: 400, headers: corsHeaders() });
 
         const draftRes = await fetch(`https://api.weixin.qq.com/cgi-bin/draft/add?access_token=${token}`, {
           method: "POST",
@@ -176,10 +271,10 @@ export default {
           }),
         });
         const j = await draftRes.json();
-        if (j.errcode === 0) return new Response(JSON.stringify({ errcode: 0, media_id: j.media_id, ok: true }), { headers: cors() });
-        return new Response(JSON.stringify({ errcode: j.errcode, errmsg: j.errmsg }), { status: 502, headers: cors() });
+        if (j.errcode === 0) return new Response(JSON.stringify({ errcode: 0, media_id: j.media_id, ok: true }), { headers: corsHeaders() });
+        return new Response(JSON.stringify({ errcode: j.errcode, errmsg: j.errmsg }), { status: 502, headers: corsHeaders() });
       } catch (e) {
-        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 502, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 502, headers: corsHeaders() });
       }
     }
 
@@ -187,17 +282,17 @@ export default {
     if (url.pathname === "/api/transcribe" && request.method === "POST") {
       let body;
       try { body = await request.json(); }
-      catch { return new Response(JSON.stringify({ errcode: 1, errmsg: "请求体不是合法 JSON" }), { status: 400, headers: cors() }); }
+      catch { return new Response(JSON.stringify({ errcode: 1, errmsg: "请求体不是合法 JSON" }), { status: 400, headers: corsHeaders() }); }
       const { url: mediaUrl, apiKey, model = "whisper-1" } = body;
       if (!mediaUrl || !apiKey)
-        return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 media url 或 OpenAI apiKey" }), { status: 400, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 media url 或 OpenAI apiKey" }), { status: 400, headers: corsHeaders() });
       try {
         const mediaRes = await fetch(mediaUrl, { headers: { "User-Agent": MOBILE_UA } });
         if (!mediaRes.ok)
-          return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + mediaRes.status + "）" }), { status: 502, headers: cors() });
+          return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + mediaRes.status + "）" }), { status: 502, headers: corsHeaders() });
         const buf = await mediaRes.arrayBuffer();
         if (buf.byteLength > 25 * 1024 * 1024)
-          return new Response(JSON.stringify({ errcode: 3, errmsg: "媒体超过 25MB（OpenAI 限制），请用 JotMe 手动转写" }), { status: 413, headers: cors() });
+          return new Response(JSON.stringify({ errcode: 3, errmsg: "媒体超过 25MB（OpenAI 限制），请用 JotMe 手动转写" }), { status: 413, headers: corsHeaders() });
         const contentType = mediaRes.headers.get("content-type") || "video/mp4";
         const form = new FormData();
         form.append("file", new Blob([buf], { type: contentType }), "media.mp4");
@@ -209,68 +304,77 @@ export default {
           body: form,
         });
         const tj = await tr.json();
-        if (!tr.ok) return new Response(JSON.stringify({ errcode: tr.status, errmsg: (tj.error && tj.error.message) || "转写请求失败" }), { status: 502, headers: cors() });
-        return new Response(JSON.stringify({ errcode: 0, text: tj.text || "" }), { headers: cors() });
+        if (!tr.ok) return new Response(JSON.stringify({ errcode: tr.status, errmsg: (tj.error && tj.error.message) || "转写请求失败" }), { status: 502, headers: corsHeaders() });
+        return new Response(JSON.stringify({ errcode: 0, text: tj.text || "" }), { headers: corsHeaders() });
       } catch (e) {
-        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 502, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 502, headers: corsHeaders() });
       }
     }
 
     // ---- 转写引擎运行时 wasm 代理（transformers.js 默认从 jsdelivr 拉，国内不稳）----
     if (url.pathname.startsWith("/api/ort/") && request.method === "GET") {
       const file = url.pathname.slice("/api/ort/".length);
-      if (!file || file.includes("..") || file.includes("?")) return new Response(JSON.stringify({ errcode: 1, errmsg: "非法文件名" }), { status: 400, headers: cors() });
+      if (!file || file.includes("..") || file.includes("?")) return new Response(JSON.stringify({ errcode: 1, errmsg: "非法文件名" }), { status: 400, headers: corsHeaders() });
       const target = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/" + file;
       try {
         const r = await fetch(target, { redirect: "follow" });
-        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "wasm 拉取失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
-        const h = { ...cors(), "Content-Type": r.headers.get("content-type") || "application/wasm", "Cache-Control": "public, max-age=86400" };
+        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "wasm 拉取失败（HTTP " + r.status + "）" }), { status: 502, headers: corsHeaders() });
+        const h = { ...corsHeaders(), "Content-Type": r.headers.get("content-type") || "application/wasm", "Cache-Control": "public, max-age=86400" };
         const cl = r.headers.get("content-length");
         if (cl) h["Content-Length"] = cl;
         return new Response(r.body, { headers: h });
       } catch (e) {
-        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: corsHeaders() });
       }
     }
 
     // ---- 模型文件代理（直连 huggingface.co 官方源，Worker 边缘节点国际网络畅通）----
     if (url.pathname.startsWith("/api/hf/") && request.method === "GET") {
       const rest = url.pathname.slice("/api/hf/".length);
-      if (!rest || rest.includes("..")) return new Response(JSON.stringify({ errcode: 1, errmsg: "非法路径" }), { status: 400, headers: cors() });
+      if (!rest || rest.includes("..")) return new Response(JSON.stringify({ errcode: 1, errmsg: "非法路径" }), { status: 400, headers: corsHeaders() });
       const target = "https://huggingface.co/" + rest;
       try {
         const r = await fetch(target, { redirect: "follow" });
-        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "模型文件拉取失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
-        const h = { ...cors(), "Content-Type": r.headers.get("content-type") || "application/octet-stream", "Cache-Control": "public, max-age=86400" };
+        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "模型文件拉取失败（HTTP " + r.status + "）" }), { status: 502, headers: corsHeaders() });
+        const h = { ...corsHeaders(), "Content-Type": r.headers.get("content-type") || "application/octet-stream", "Cache-Control": "public, max-age=86400" };
         const cl = r.headers.get("content-length");
         if (cl) h["Content-Length"] = cl;
         return new Response(r.body, { headers: h });
       } catch (e) {
-        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: corsHeaders() });
+      }
+    }
+
+    // ---- 改写中转（OpenRouter 密钥存服务端，前端免粘贴）----
+    if (url.pathname === "/api/rewrite" && request.method === "POST") {
+      try {
+        return await handleRewrite(request, env, corsHeaders());
+      } catch (e) {
+        return new Response(JSON.stringify({ errcode: 1, errmsg: "Worker 内部错误：" + (e && e.message ? e.message : String(e)) }), { status: 500, headers: corsHeaders() });
       }
     }
 
     // ---- 媒体代理（本地 Whisper 取媒体，绕开浏览器跨域）----
     if (url.pathname === "/api/media" && request.method === "GET") {
       const target = url.searchParams.get("url") || "";
-      if (!target) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 url 参数" }), { status: 400, headers: cors() });
+      if (!target) return new Response(JSON.stringify({ errcode: 1, errmsg: "缺少 url 参数" }), { status: 400, headers: corsHeaders() });
       try {
         const r = await fetch(target, {
           headers: { "User-Agent": MOBILE_UA, "Referer": "https://www.douyin.com/" },
           redirect: "follow",
         });
-        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + r.status + "）" }), { status: 502, headers: cors() });
+        if (!r.ok) return new Response(JSON.stringify({ errcode: 2, errmsg: "拉取媒体失败（HTTP " + r.status + "）" }), { status: 502, headers: corsHeaders() });
         // 流式转发：不把视频读进 Worker 内存（大视频会撞 128MB 内存上限导致崩溃）
         const ct = r.headers.get("content-type") || "application/octet-stream";
-        const h = { ...cors(), "Content-Type": ct, "Cache-Control": "no-store" };
+        const h = { ...corsHeaders(), "Content-Type": ct, "Cache-Control": "no-store" };
         const cl = r.headers.get("content-length");
         if (cl) h["Content-Length"] = cl;
         return new Response(r.body, { headers: h });
       } catch (e) {
-        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: cors() });
+        return new Response(JSON.stringify({ errcode: 1, errmsg: String(e.message || e) }), { status: 500, headers: corsHeaders() });
       }
     }
 
-    return new Response("Not Found", { status: 404, headers: cors() });
+    return new Response("Not Found", { status: 404, headers: corsHeaders() });
   },
 };
