@@ -475,7 +475,7 @@
       model = "deepseek-chat";
     } else if (provider === "openrouter") {
       endpoint = "https://openrouter.ai/api/v1/chat/completions";
-      model = modelOverride || ($("selOrModel") && $("selOrModel").value) || "google/gemma-4-31b-it:free";
+      model = modelOverride || ($("selOrModel") && $("selOrModel").value) || "nvidia/nemotron-3-ultra-550b-a55b:free";
     } else {
       endpoint = "https://api.openai.com/v1/chat/completions";
       model = "gpt-4o-mini";
@@ -526,7 +526,7 @@
         if (o.value !== chosen && o.value.endsWith(":free")) candidates.push(o.value);
       }
     } else {
-      candidates.push("google/gemma-4-31b-it:free");
+      candidates.push("nvidia/nemotron-3-ultra-550b-a55b:free");
     }
     let lastErr = null;
     for (let i = 0; i < candidates.length; i++) {
@@ -539,11 +539,13 @@
           return raw;
         } catch (e) {
           lastErr = e;
-          if ((e.message || "").indexOf("429") !== -1) {
+          const msg = e.message || "";
+          // 429 限流 / 404 模型下线 / 502 503 上游故障 → 都是"换一个重试"，其他错误（Key 无效等）才直接报
+          if (msg.indexOf("429") !== -1 || msg.indexOf("404") !== -1 || msg.indexOf("502") !== -1 || msg.indexOf("503") !== -1 || msg.indexOf("Provider returned error") !== -1) {
             if (attempt < 2) { await new Promise((r) => setTimeout(r, 3500)); continue; } // 等 3.5s 再试同一模型
-            break; // 同一模型 3 次都限流 → 换下一个候选
+            break; // 同一模型 3 次都失败 → 换下一个候选
           }
-          throw e; // 其他错误（Key 无效等）直接报
+          throw e;
         }
       }
     }
@@ -552,9 +554,9 @@
 
   // ---------- OpenRouter 免费模型列表（启动时拉取，失败用内置兜底） ----------
   const OR_FALLBACK_MODELS = [
-    "google/gemma-4-31b-it:free",
-    "minimax/minimax-m3.1-flash:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "xingchen-agi/xing4.0-29b-a4b:free",
   ];
   async function loadOrModels() {
     const sel = $("selOrModel");
