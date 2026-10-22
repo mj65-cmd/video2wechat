@@ -596,7 +596,8 @@
       apiKey = (LS.getItem(keyLSKey) || "").trim();
       if (apiKey) $("inpKey").value = apiKey;
     }
-    if (!apiKey) { setStatus("rewriteStatus", "请填写 API Key（DeepSeek / OpenAI / OpenRouter）", "warn"); return; }
+    // OpenRouter 支持云端取 Key（Worker 服务端存储），允许本地无 Key；其他提供商必须有 Key
+    if (!apiKey && provider !== "openrouter") { setStatus("rewriteStatus", "请填写 API Key（DeepSeek / OpenAI）", "warn"); return; }
 
     const styleText = $("selStyle").selectedOptions[0].text;
     $("btnRewrite").disabled = true;
